@@ -1,3 +1,7 @@
+local SUPPORTED_GAME_IDS = {
+    [10298144467] = true,
+    [10445190670] = true,
+}
 local LOBBY_PLACE_ID = 107653945083776
 local TOWER_PLACE_ID = 133623616308412
 local RAID_PLACE_IDS = {
@@ -19,8 +23,8 @@ local LOBBY_PLACE_IDS = {
     [72769188242214] = true,
 }
 local IS_LOBBY = LOBBY_PLACE_IDS[game.PlaceId] == true
-if not IS_LOBBY and not IS_RUN then
-    warn("[ARF Hub] Unsupported place: " .. tostring(game.PlaceId))
+if not SUPPORTED_GAME_IDS[game.GameId] then
+    warn("[ARF Hub] Unsupported game: " .. tostring(game.GameId))
     return
 end
 print("[ARF Hub] starting at place " .. tostring(game.PlaceId))
@@ -77,7 +81,7 @@ local PreviousConfig = {
     PortalAutoStart = configValue("PortalAutoStart", true),
     PortalMinMembers = configValue("PortalMinMembers", 1),
     AutoRaid = configValue("AutoRaid", false),
-    RaidAutoStart = configValue("RaidAutoStart", true),
+    RaidAutoStart = configValue("RaidAutoStart", false),
     RaidMinMembers = configValue("RaidMinMembers", 1),
     AutoSpin = configValue("AutoSpin", false),
     AutoEquipBest = configValue("AutoEquipBest", false),
@@ -169,6 +173,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
+local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 local TeleportService = game:GetService("TeleportService")
 
@@ -804,11 +809,32 @@ connect(LocalPlayer.Idled, function()
     end
 end)
 
-connect(Players.PlayerRemoving, function(player)
-    if player == LocalPlayer and State.AutoReconnect then
-        pcall(function()
+local reconnecting = false
+local function reconnect()
+    if not State.Alive or not State.AutoReconnect or reconnecting then
+        return
+    end
+    reconnecting = true
+    saveConfigNow()
+    task.delay(2, function()
+        local ok = pcall(function()
             TeleportService:Teleport(game.PlaceId, LocalPlayer)
         end)
+        if not ok then
+            reconnecting = false
+        end
+    end)
+end
+
+connect(GuiService.ErrorMessageChanged, function(message)
+    if type(message) == "string" and message ~= "" then
+        reconnect()
+    end
+end)
+
+connect(Players.PlayerRemoving, function(player)
+    if player == LocalPlayer then
+        reconnect()
     end
 end)
 
@@ -2405,7 +2431,7 @@ end
 local Fluent = loadstring(FluentSrc)()
 State.Fluent = Fluent
 State.LoadTime = os.clock()
-State.HubVersion = "2026.09.12-autostart"
+State.HubVersion = "2026.09.23-teleport-fix"
 print("[ARF Hub] loaded " .. State.HubVersion .. " at place " .. tostring(game.PlaceId))
 
 local Window = Fluent:CreateWindow({
