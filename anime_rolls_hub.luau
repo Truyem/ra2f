@@ -224,9 +224,17 @@ local SharedItems = SharedModules and SharedModules:FindFirstChild("Items")
 local ItemsInfo = safeRequire(SharedItems and SharedItems:FindFirstChild("ItemsInfo")) or { Items = {} }
 local DataService = safeRequire(ReplicatedStorage:FindFirstChild("Data") and ReplicatedStorage.Data:FindFirstChild("DataService"))
 local DataClient = DataService and DataService.client
+local HasDataClient = DataClient ~= nil
 if not DataClient then
-    warn("[ARF Hub] No DataService, aborting")
-    return
+    warn("[ARF Hub] No DataService, continuing degraded")
+    DataClient = {
+        get = function()
+            return nil
+        end,
+        waitForData = function()
+            return false
+        end,
+    }
 end
 local SharedEvolve = SharedModules and SharedModules:FindFirstChild("Evolve")
 local EvolutionInfo = safeRequire(SharedEvolve and SharedEvolve:FindFirstChild("EvolutionInfo")) or { Characters = {} }
@@ -248,7 +256,7 @@ local AccesoryInfo = nil
 pcall(function()
     AccesoryInfo = require(ReplicatedStorage.Modules.Shared.Accesory.AccesoryInfo)
 end)
-do
+if HasDataClient then
     local dataReady = false
     task.spawn(function()
         pcall(function()
