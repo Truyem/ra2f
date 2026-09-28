@@ -85,6 +85,7 @@ local PreviousConfig = {
     RaidAutoStart = configValue("RaidAutoStart", false),
     RaidMinMembers = configValue("RaidMinMembers", 1),
     RaidDifficulty = configValue("RaidDifficulty", "Easy"),
+    AutoSkipRaidCutscene = configValue("AutoSkipRaidCutscene", true),
     AutoDailyChallenge = configValue("AutoDailyChallenge", false),
     AutoWeeklyChallenge = configValue("AutoWeeklyChallenge", false),
     AutoSurvival = configValue("AutoSurvival", false),
@@ -323,6 +324,7 @@ local State = {
     RaidAutoStart = PreviousConfig.RaidAutoStart,
     RaidMinMembers = PreviousConfig.RaidMinMembers,
     RaidDifficulty = PreviousConfig.RaidDifficulty,
+    AutoSkipRaidCutscene = PreviousConfig.AutoSkipRaidCutscene,
     AutoDailyChallenge = PreviousConfig.AutoDailyChallenge,
     AutoWeeklyChallenge = PreviousConfig.AutoWeeklyChallenge,
     AutoSurvival = PreviousConfig.AutoSurvival,
@@ -340,11 +342,13 @@ local State = {
     RaidBrowse = {},
     RaidInviteId = nil,
     LastRaidAction = 0,
+    LastRaidSkipAction = 0,
     ChallengeData = nil,
     LastChallengeAction = 0,
     SurvivalId = nil,
     SurvivalStatus = "Idle",
     LastSurvivalAction = 0,
+    LastRunFightStart = 0,
     WebhookEnabled = PreviousConfig.WebhookEnabled,
     WebhookURL = PreviousConfig.WebhookURL,
     SelectedUnits = PreviousConfig.SelectedUnits,
@@ -416,6 +420,7 @@ local function saveConfigNow()
         RaidAutoStart = State.RaidAutoStart,
         RaidMinMembers = State.RaidMinMembers,
         RaidDifficulty = State.RaidDifficulty,
+        AutoSkipRaidCutscene = State.AutoSkipRaidCutscene,
         AutoDailyChallenge = State.AutoDailyChallenge,
         AutoWeeklyChallenge = State.AutoWeeklyChallenge,
         AutoSurvival = State.AutoSurvival,
@@ -1279,6 +1284,19 @@ connect(RaidUpdate and RaidUpdate.OnClientEvent, function(action, data)
     end
     if action == "Party" and type(data) == "table" then
         State.RaidParty = data
+    elseif action == "Ready" and type(data) == "table" and State.AutoSkipRaidCutscene then
+        local alreadyVoted = type(data.SkipPlayers) == "table" and data.SkipPlayers[LocalPlayer.UserId] == true
+        if (data.Phase == "ReadyUp" or data.IntroActive == true) and not alreadyVoted and os.clock() - State.LastRaidSkipAction >= 1 then
+            State.LastRaidSkipAction = os.clock()
+            task.defer(function()
+                RaidRequest:FireServer("Skip")
+            end)
+        end
+    elseif action == "Cutscene" and State.AutoSkipRaidCutscene and os.clock() - State.LastRaidSkipAction >= 1 then
+        State.LastRaidSkipAction = os.clock()
+        task.defer(function()
+            RaidRequest:FireServer("Skip")
+        end)
     elseif action == "Browse" and type(data) == "table" then
         State.RaidBrowse = data.Parties or data
     elseif action == "Closed" then
@@ -1333,6 +1351,22 @@ task.spawn(function()
             end)
         end
         task.wait((State.AutoDailyChallenge or State.AutoWeeklyChallenge) and 1 or 5)
+    end
+end)
+
+task.spawn(function()
+    while State.Alive do
+        local survivalRunning = State.SurvivalStatus == "Running" or LocalPlayer:GetAttribute("SurvivalActive") == true
+        local shouldStartFight = (State.AutoSurvival and survivalRunning)
+            or (IS_RAID and State.AutoRaid)
+            or (IS_DUNGEON and (State.AutoDailyChallenge or State.AutoWeeklyChallenge))
+        if shouldStartFight and LocalPlayer:GetAttribute("FightRunning") ~= true and os.clock() - State.LastRunFightStart >= 3 then
+            State.LastRunFightStart = os.clock()
+            pcall(function()
+                FightRemote:FireServer("Start")
+            end)
+        end
+        task.wait(shouldStartFight and 1 or 5)
     end
 end)
 
@@ -1542,7 +1576,10 @@ task.spawn(function()
                     RaidRequest:FireServer("Refresh")
                 end)
                 task.wait(1)
-                if State.Alive and State.AutoRaid and State.RaidParty == nil then
+                local refreshedParty = State.RaidParty
+                local needsCreate = refreshedParty == nil
+                    or (type(refreshedParty.Members) == "table" and #refreshedParty.Members <= 1 and refreshedParty.Created ~= true)
+                if State.Alive and State.AutoRaid and needsCreate then
                     pcall(function()
                         RaidRequest:FireServer("Create", "Private", State.RaidDifficulty)
                     end)
@@ -2533,7 +2570,7 @@ end
 local Fluent = loadstring(FluentSrc)()
 State.Fluent = Fluent
 State.LoadTime = os.clock()
-State.HubVersion = "2026.09.28-mode-exclusivity"
+State.HubVersion = "2026.09.29-survival-start"
 print("[ARF Hub] loaded " .. State.HubVersion .. " at place " .. tostring(game.PlaceId))
 
 local Window = Fluent:CreateWindow({
@@ -3049,6 +3086,16 @@ Tabs.PortalRaid:AddDropdown("RaidDifficulty", {
     Default = State.RaidDifficulty,
 }):OnChanged(function(value)
     State.RaidDifficulty = tostring(value or "Easy")
+    scheduleConfigSave()
+end)
+
+Tabs.PortalRaid:AddToggle("AutoSkipRaidCutscene", {
+    Title = "Auto Skip Raid Cutscene",
+    Description = "Automatically votes to skip the raid intro cutscene",
+    Default = State.AutoSkipRaidCutscene,
+}):OnChanged(function(value)
+    State.AutoSkipRaidCutscene = value
+    State.LastRaidSkipAction = 0
     scheduleConfigSave()
 end)
 
