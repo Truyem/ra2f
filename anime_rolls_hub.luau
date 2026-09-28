@@ -83,6 +83,10 @@ local PreviousConfig = {
     AutoRaid = configValue("AutoRaid", false),
     RaidAutoStart = configValue("RaidAutoStart", false),
     RaidMinMembers = configValue("RaidMinMembers", 1),
+    RaidDifficulty = configValue("RaidDifficulty", "Easy"),
+    AutoDailyChallenge = configValue("AutoDailyChallenge", false),
+    AutoWeeklyChallenge = configValue("AutoWeeklyChallenge", false),
+    AutoSurvival = configValue("AutoSurvival", false),
     AutoSpin = configValue("AutoSpin", false),
     AutoEquipBest = configValue("AutoEquipBest", false),
     GameSpeed = configValue("GameSpeed", "x1"),
@@ -114,6 +118,7 @@ local PreviousConfig = {
     SelectedPortalNames = {},
     SelectedRaidDifficulties = {},
     SelectedRaidMaps = {},
+    SelectedSurvivalUnits = {},
     RaidHistory = {},
 }
 local selectionSource = previous or SavedConfig
@@ -150,6 +155,9 @@ if selectionSource then
     end
     for name, selected in pairs(selectionSource.SelectedRaidMaps or {}) do
         PreviousConfig.SelectedRaidMaps[name] = selected
+    end
+    for name, selected in pairs(selectionSource.SelectedSurvivalUnits or {}) do
+        PreviousConfig.SelectedSurvivalUnits[name] = selected
     end
     if type(selectionSource.RaidHistory) == "table" then
         for _, w in ipairs(selectionSource.RaidHistory) do
@@ -212,6 +220,8 @@ local PortalUpdate = safeWait(PortalsFolder, "Update")
 local RaidsFolder = safeWait(Remotes, "Raids")
 local RaidRequest = safeWait(RaidsFolder, "Request")
 local RaidUpdate = safeWait(RaidsFolder, "Update")
+local ChallengesRemote = Remotes and Remotes:FindFirstChild("Challenges")
+local SurvivalRemote = Remotes and Remotes:FindFirstChild("Survival")
 local SpinRemote = safeWait(safeWait(Remotes, "SpinWheel"), "Spin")
 local UpgradeRemote = safeWait(Remotes, "Upgrade")
 local TopModules = safeWait(ReplicatedStorage, "Modules")
@@ -311,11 +321,16 @@ local State = {
     AutoRaid = PreviousConfig.AutoRaid,
     RaidAutoStart = PreviousConfig.RaidAutoStart,
     RaidMinMembers = PreviousConfig.RaidMinMembers,
+    RaidDifficulty = PreviousConfig.RaidDifficulty,
+    AutoDailyChallenge = PreviousConfig.AutoDailyChallenge,
+    AutoWeeklyChallenge = PreviousConfig.AutoWeeklyChallenge,
+    AutoSurvival = PreviousConfig.AutoSurvival,
     AutoRunReturn = PreviousConfig.AutoRunReturn,
     SelectedPortalDifficulties = PreviousConfig.SelectedPortalDifficulties,
     SelectedPortalNames = PreviousConfig.SelectedPortalNames,
     SelectedRaidDifficulties = PreviousConfig.SelectedRaidDifficulties,
     SelectedRaidMaps = PreviousConfig.SelectedRaidMaps,
+    SelectedSurvivalUnits = PreviousConfig.SelectedSurvivalUnits,
     RaidHistory = PreviousConfig.RaidHistory,
     PortalSession = nil,
     PortalInviteId = nil,
@@ -324,6 +339,11 @@ local State = {
     RaidBrowse = {},
     RaidInviteId = nil,
     LastRaidAction = 0,
+    ChallengeData = nil,
+    LastChallengeAction = 0,
+    SurvivalId = nil,
+    SurvivalStatus = "Idle",
+    LastSurvivalAction = 0,
     WebhookEnabled = PreviousConfig.WebhookEnabled,
     WebhookURL = PreviousConfig.WebhookURL,
     SelectedUnits = PreviousConfig.SelectedUnits,
@@ -394,6 +414,10 @@ local function saveConfigNow()
         AutoRaid = State.AutoRaid,
         RaidAutoStart = State.RaidAutoStart,
         RaidMinMembers = State.RaidMinMembers,
+        RaidDifficulty = State.RaidDifficulty,
+        AutoDailyChallenge = State.AutoDailyChallenge,
+        AutoWeeklyChallenge = State.AutoWeeklyChallenge,
+        AutoSurvival = State.AutoSurvival,
         AutoRunReturn = State.AutoRunReturn,
         AutoSpin = State.AutoSpin,
         AutoEquipBest = State.AutoEquipBest,
@@ -426,6 +450,7 @@ local function saveConfigNow()
         SelectedPortalNames = State.SelectedPortalNames,
         SelectedRaidDifficulties = State.SelectedRaidDifficulties,
         SelectedRaidMaps = State.SelectedRaidMaps,
+        SelectedSurvivalUnits = State.SelectedSurvivalUnits,
         RaidHistory = State.RaidHistory,
     }
     return pcall(writeFile, configFile, configHttp:JSONEncode(config))
@@ -1038,12 +1063,6 @@ local function portalFilterEmpty(selection)
 end
 
 local function raidWindowMatches()
-    if not portalFilterEmpty(State.SelectedRaidDifficulties) then
-        local diff = workspace:GetAttribute("RaidDifficulty")
-        if not selectionContains(State.SelectedRaidDifficulties, diff) then
-            return false
-        end
-    end
     if not portalFilterEmpty(State.SelectedRaidMaps) then
         local map = workspace:GetAttribute("RaidMapName")
         if not selectionContains(State.SelectedRaidMaps, map) then
@@ -1286,6 +1305,88 @@ connect(RaidUpdate and RaidUpdate.OnClientEvent, function(action, data)
     end
 end)
 
+connect(ChallengesRemote and ChallengesRemote.OnClientEvent, function(action, data)
+    if State.Alive and action == "State" and type(data) == "table" then
+        State.ChallengeData = data
+    end
+end)
+
+task.spawn(function()
+    while State.Alive do
+        if (State.AutoDailyChallenge or State.AutoWeeklyChallenge) and ChallengesRemote and os.clock() - State.LastChallengeAction >= 3 then
+            State.LastChallengeAction = os.clock()
+            local data = State.ChallengeData
+            local party = data and data.Party
+            local kind = State.AutoWeeklyChallenge and "Weekly" or "Daily"
+            local challenge = data and data[kind]
+            pcall(function()
+                if not party or not challenge then
+                    ChallengesRemote:FireServer("State")
+                elseif party.Kind ~= kind then
+                    ChallengesRemote:FireServer("Select", kind)
+                elseif party.Mode ~= "Solo" then
+                    ChallengesRemote:FireServer("Mode", "Solo")
+                elseif party.Leader == LocalPlayer.UserId and not party.Starting and workspace:GetServerTimeNow() < (tonumber(challenge.EndsAt) or 0) then
+                    ChallengesRemote:FireServer("Start", kind, challenge.Id)
+                end
+            end)
+        end
+        task.wait((State.AutoDailyChallenge or State.AutoWeeklyChallenge) and 1 or 5)
+    end
+end)
+
+connect(SurvivalRemote and SurvivalRemote.OnClientEvent, function(action, data)
+    if not State.Alive or action == "CurrencyDrop" or action == "Shop" then
+        return
+    end
+    State.SurvivalStatus = tostring(action)
+    if type(data) == "table" and data.Id ~= nil then
+        State.SurvivalId = data.Id
+    end
+    if not State.AutoSurvival then
+        return
+    end
+    if action == "Entry" then
+        task.defer(function()
+            SurvivalRemote:FireServer("Use", State.SurvivalId)
+        end)
+    elseif action == "Ready" then
+        task.defer(function()
+            SurvivalRemote:FireServer("Start", State.SurvivalId)
+        end)
+    elseif action == "Draft" and type(data) == "table" and type(data.Choices) == "table" then
+        local selectedIndex = 1
+        for index, choice in ipairs(data.Choices) do
+            if type(choice) == "table" and selectionContains(State.SelectedSurvivalUnits, choice.Name) then
+                selectedIndex = index
+                break
+            end
+        end
+        task.defer(function()
+            SurvivalRemote:FireServer("Choose", State.SurvivalId, selectedIndex)
+        end)
+    elseif action == "Idle" then
+        State.SurvivalId = nil
+    end
+end)
+
+task.spawn(function()
+    while State.Alive do
+        if State.AutoSurvival and SurvivalRemote and State.SurvivalStatus == "Idle" and os.clock() - State.LastSurvivalAction >= 10 then
+            State.LastSurvivalAction = os.clock()
+            local monetization = workspace:FindFirstChild("Monetization")
+            local survival = monetization and monetization:FindFirstChild("SurvivalMode")
+            local prompt = survival and survival:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt then
+                activatePrompt(prompt)
+            else
+                SurvivalRemote:FireServer("Sync")
+            end
+        end
+        task.wait(State.AutoSurvival and 2 or 5)
+    end
+end)
+
 task.spawn(function()
     while State.Alive do
         if not State.AutoPortal then
@@ -1442,7 +1543,7 @@ task.spawn(function()
                 task.wait(1)
                 if State.Alive and State.AutoRaid and State.RaidParty == nil then
                     pcall(function()
-                        RaidRequest:FireServer("Create", "Private")
+                        RaidRequest:FireServer("Create", "Private", State.RaidDifficulty)
                     end)
                     print("[ARF Hub] raid Create fired")
                     sendWebhook("Raid Created", "Created a solo raid party.", 5793266)
@@ -2431,7 +2532,7 @@ end
 local Fluent = loadstring(FluentSrc)()
 State.Fluent = Fluent
 State.LoadTime = os.clock()
-State.HubVersion = "2026.09.23-teleport-fix"
+State.HubVersion = "2026.09.28-survival-weekly"
 print("[ARF Hub] loaded " .. State.HubVersion .. " at place " .. tostring(game.PlaceId))
 
 local Window = Fluent:CreateWindow({
@@ -2939,14 +3040,88 @@ Tabs.PortalRaid:AddInput("RaidMinMembers", {
     scheduleConfigSave()
 end)
 
-Tabs.PortalRaid:AddDropdown("RaidDifficulties", {
-    Title = "Raid Difficulty Filter",
-    Description = "Game has no picker (server rotates); empty = run every window",
+Tabs.PortalRaid:AddDropdown("RaidDifficulty", {
+    Title = "Raid Difficulty",
+    Description = "Difficulty used when creating the raid party",
     Values = raidDifficultyNames,
-    Multi = true,
-    Default = State.SelectedRaidDifficulties,
+    Multi = false,
+    Default = State.RaidDifficulty,
 }):OnChanged(function(value)
-    replaceSelection(State.SelectedRaidDifficulties, value)
+    State.RaidDifficulty = tostring(value or "Easy")
+    scheduleConfigSave()
+end)
+
+Tabs.PortalRaid:AddToggle("AutoDailyChallenge", {
+    Title = "Auto Daily Mission",
+    Description = "Selects the daily challenge, switches to solo, and starts it automatically",
+    Default = State.AutoDailyChallenge,
+}):OnChanged(function(value)
+    State.AutoDailyChallenge = value
+    if value then
+        State.AutoWeeklyChallenge = false
+        local weeklyOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoWeeklyChallenge
+        if weeklyOption and weeklyOption.Value then
+            weeklyOption:SetValue(false)
+        end
+    end
+    State.ChallengeData = nil
+    State.LastChallengeAction = 0
+    if value and ChallengesRemote then
+        task.defer(function()
+            ChallengesRemote:FireServer("State")
+        end)
+    end
+    scheduleConfigSave()
+end)
+
+Tabs.PortalRaid:AddToggle("AutoWeeklyChallenge", {
+    Title = "Auto Weekly Mission",
+    Description = "Selects the weekly challenge, switches to solo, and starts it automatically",
+    Default = State.AutoWeeklyChallenge,
+}):OnChanged(function(value)
+    State.AutoWeeklyChallenge = value
+    if value then
+        State.AutoDailyChallenge = false
+        local dailyOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoDailyChallenge
+        if dailyOption and dailyOption.Value then
+            dailyOption:SetValue(false)
+        end
+    end
+    State.ChallengeData = nil
+    State.LastChallengeAction = 0
+    if value and ChallengesRemote then
+        task.defer(function()
+            ChallengesRemote:FireServer("State")
+        end)
+    end
+    scheduleConfigSave()
+end)
+
+Tabs.PortalRaid:AddDropdown("SurvivalUnits", {
+    Title = "Survival Draft Units",
+    Description = "Prefers selected units when choosing one of the three draft cards",
+    Values = unitNames,
+    Multi = true,
+    Default = State.SelectedSurvivalUnits,
+}):OnChanged(function(value)
+    replaceSelection(State.SelectedSurvivalUnits, value)
+    scheduleConfigSave()
+end)
+
+Tabs.PortalRaid:AddToggle("AutoSurvival", {
+    Title = "Auto Survival",
+    Description = "Uses Survival Tickets, starts runs, and automatically chooses draft units",
+    Default = State.AutoSurvival,
+}):OnChanged(function(value)
+    State.AutoSurvival = value
+    State.SurvivalStatus = "Idle"
+    State.SurvivalId = nil
+    State.LastSurvivalAction = 0
+    if value and SurvivalRemote then
+        task.defer(function()
+            SurvivalRemote:FireServer("Sync")
+        end)
+    end
     scheduleConfigSave()
 end)
 
