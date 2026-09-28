@@ -15,8 +15,9 @@ local DUNGEON_PLACE_IDS = {
     [89230410866378] = true,
 }
 local IS_TOWER = game.PlaceId == TOWER_PLACE_ID
-local IS_RAID = RAID_PLACE_IDS[game.PlaceId] == true
-local IS_DUNGEON = DUNGEON_PLACE_IDS[game.PlaceId] == true
+local IS_CHALLENGE = workspace:GetAttribute("ChallengeRun") == true
+local IS_RAID = RAID_PLACE_IDS[game.PlaceId] == true or (workspace:GetAttribute("RaidPhase") ~= nil and not IS_CHALLENGE)
+local IS_DUNGEON = DUNGEON_PLACE_IDS[game.PlaceId] == true or IS_CHALLENGE
 local IS_RUN = IS_TOWER or IS_RAID or IS_DUNGEON
 local LOBBY_PLACE_IDS = {
     [LOBBY_PLACE_ID] = true,
@@ -2532,7 +2533,7 @@ end
 local Fluent = loadstring(FluentSrc)()
 State.Fluent = Fluent
 State.LoadTime = os.clock()
-State.HubVersion = "2026.09.28-survival-weekly"
+State.HubVersion = "2026.09.28-mode-exclusivity"
 print("[ARF Hub] loaded " .. State.HubVersion .. " at place " .. tostring(game.PlaceId))
 
 local Window = Fluent:CreateWindow({
@@ -3059,9 +3060,14 @@ Tabs.PortalRaid:AddToggle("AutoDailyChallenge", {
     State.AutoDailyChallenge = value
     if value then
         State.AutoWeeklyChallenge = false
+        State.AutoSurvival = false
         local weeklyOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoWeeklyChallenge
         if weeklyOption and weeklyOption.Value then
             weeklyOption:SetValue(false)
+        end
+        local survivalOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoSurvival
+        if survivalOption and survivalOption.Value then
+            survivalOption:SetValue(false)
         end
     end
     State.ChallengeData = nil
@@ -3082,9 +3088,14 @@ Tabs.PortalRaid:AddToggle("AutoWeeklyChallenge", {
     State.AutoWeeklyChallenge = value
     if value then
         State.AutoDailyChallenge = false
+        State.AutoSurvival = false
         local dailyOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoDailyChallenge
         if dailyOption and dailyOption.Value then
             dailyOption:SetValue(false)
+        end
+        local survivalOption = State.Fluent and State.Fluent.Options and State.Fluent.Options.AutoSurvival
+        if survivalOption and survivalOption.Value then
+            survivalOption:SetValue(false)
         end
     end
     State.ChallengeData = nil
@@ -3114,8 +3125,20 @@ Tabs.PortalRaid:AddToggle("AutoSurvival", {
     Default = State.AutoSurvival,
 }):OnChanged(function(value)
     State.AutoSurvival = value
-    State.SurvivalStatus = "Idle"
-    State.SurvivalId = nil
+    if value then
+        State.AutoDailyChallenge = false
+        State.AutoWeeklyChallenge = false
+        local options = State.Fluent and State.Fluent.Options
+        if options and options.AutoDailyChallenge and options.AutoDailyChallenge.Value then
+            options.AutoDailyChallenge:SetValue(false)
+        end
+        if options and options.AutoWeeklyChallenge and options.AutoWeeklyChallenge.Value then
+            options.AutoWeeklyChallenge:SetValue(false)
+        end
+    else
+        State.SurvivalStatus = "Idle"
+        State.SurvivalId = nil
+    end
     State.LastSurvivalAction = 0
     if value and SurvivalRemote then
         task.defer(function()
